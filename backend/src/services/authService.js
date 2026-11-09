@@ -9,11 +9,29 @@ import { clearExpiredTemporaryBan } from "./driverBanService.js";
 const SESSION_TTL_HOURS = Number(process.env.SESSION_TTL_HOURS || 24);
 
 // Create a new authentication session
+
 export const createSession = async ({
   role,
   userId,
   authMethod = "cookie",
 }) => {
+  // Validate inputs
+  if (!["admin", "driver"].includes(role)) {
+    throw new Error("Invalid session role.");
+  }
+
+  if (!["cookie", "bearer"].includes(authMethod)) {
+    throw new Error("Invalid authentication method.");
+  }
+
+  if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) {
+    throw new Error("Invalid user ID.");
+  }
+
+  if (!Number.isFinite(SESSION_TTL_HOURS) || SESSION_TTL_HOURS <= 0) {
+    throw new Error("Invalid session expiration setting.");
+  }
+
   const rawToken = generateSessionToken();
   const tokenHash = hashSessionToken(rawToken);
 
@@ -24,21 +42,25 @@ export const createSession = async ({
   try {
     await connection.beginTransaction();
 
-    // Driver can have only one active session
     if (role === "driver") {
+      // Lock Driver row and check current account status
       const [drivers] = await connection.execute(
-        `SELECT id
+        `SELECT id, deleted_at, ban_type
          FROM drivers
          WHERE id = ?
          FOR UPDATE`,
         [userId],
       );
 
-      if (drivers.length === 0) {
-        throw new Error("Driver account not found.");
+      if (drivers.length === 0 || drivers[0].deleted_at !== null) {
+        throw new Error("Driver account not found or deleted.");
       }
 
-      // Revoke previous active sessions
+      if (drivers[0].ban_type !== "none") {
+        throw new Error("Banned Driver cannot create a session.");
+      }
+
+      // Revoke all previous active Driver sessions
       await connection.execute(
         `UPDATE auth_sessions
          SET revoked_at = NOW()
@@ -55,6 +77,21 @@ export const createSession = async ({
          WHERE id = ?`,
         [userId],
       );
+    }
+
+    if (role === "admin") {
+      // Lock Admin row and check account status
+      const [admins] = await connection.execute(
+        `SELECT id, is_active
+         FROM admins
+         WHERE id = ?
+         FOR UPDATE`,
+        [userId],
+      );
+
+      if (admins.length === 0 || !admins[0].is_active) {
+        throw new Error("Admin account not found or inactive.");
+      }
     }
 
     const ownerColumn = role === "admin" ? "admin_id" : "driver_id";
@@ -81,121 +118,197 @@ export const createSession = async ({
 };
 
 // Find and validate an active session
+
 export const findActiveSession = async (rawToken, authMethod) => {
   if (!rawToken || !["cookie", "bearer"].includes(authMethod)) {
     return null;
   }
 
   const tokenHash = hashSessionToken(rawToken);
+  const connection = await pool.getConnection();
 
-  const [rows] = await pool.execute(
-    `SELECT
-       s.id AS session_id,
-       s.admin_id,
-       s.driver_id,
-       s.auth_method,
-       a.username,
-       a.email,
-       a.is_active AS admin_is_active
-     FROM auth_sessions s
-     LEFT JOIN admins a ON a.id = s.admin_id
-     WHERE s.token_hash = ?
-       AND s.auth_method = ?
-       AND s.revoked_at IS NULL
-       AND s.expires_at > NOW()
-     LIMIT 1`,
-    [tokenHash, authMethod],
-  );
-
-  if (rows.length === 0) return null;
-
-  const session = rows[0];
-
-  // Admin session validation
-  if (session.admin_id !== null) {
-    if (!session.admin_is_active) {
-      await pool.execute(
-        `UPDATE auth_sessions
-         SET revoked_at = NOW()
-         WHERE id = ? AND revoked_at IS NULL`,
-        [session.session_id],
-      );
-
-      return null;
-    }
-
-    await pool.execute(
-      `UPDATE auth_sessions
-       SET last_used_at = NOW()
-       WHERE id = ?`,
-      [session.session_id],
-    );
-
-    return {
-      sessionId: session.session_id,
-      role: "admin",
-      userId: session.admin_id,
-      username: session.username,
-      email: session.email,
-    };
-  }
-
-  // Driver session validation
-  if (session.driver_id !== null) {
-    // Clear expired temporary ban
-    await clearExpiredTemporaryBan(session.driver_id);
-
-    // Read the latest Driver status
-    const [driverRows] = await pool.execute(
-      `SELECT
-         id,
-         full_name,
-         phone_number,
-         registration_status,
-         ban_type,
-         deleted_at
-       FROM drivers
-       WHERE id = ?
+  try {
+    // 1. Find session owner without locking
+    const [sessionRows] = await connection.execute(
+      `SELECT id, admin_id, driver_id
+       FROM auth_sessions
+       WHERE token_hash = ?
+         AND auth_method = ?
        LIMIT 1`,
-      [session.driver_id],
+      [tokenHash, authMethod],
     );
 
-    if (driverRows.length === 0) {
+    if (sessionRows.length === 0) {
       return null;
     }
 
-    const driver = driverRows[0];
+    const initialSession = sessionRows[0];
 
-    // Deleted or currently banned Driver
-    if (driver.deleted_at !== null || driver.ban_type !== "none") {
-      await pool.execute(
-        `UPDATE auth_sessions
-         SET revoked_at = NOW()
-         WHERE id = ? AND revoked_at IS NULL`,
-        [session.session_id],
+    await connection.beginTransaction();
+
+    let user = null;
+
+    // 2. Driver session validation
+    if (initialSession.driver_id !== null) {
+      // Lock Driver row first
+      const [drivers] = await connection.execute(
+        `SELECT
+           id,
+           full_name,
+           phone_number,
+           registration_status,
+           ban_type,
+           ban_expires_at,
+           deleted_at
+         FROM drivers
+         WHERE id = ?
+         FOR UPDATE`,
+        [initialSession.driver_id],
       );
 
-      return null;
+      if (drivers.length === 0) {
+        // Driver no longer exists
+        await connection.execute(
+          `UPDATE auth_sessions
+           SET revoked_at = NOW()
+           WHERE id = ?
+             AND revoked_at IS NULL`,
+          [initialSession.id],
+        );
+      } else {
+        const driver = drivers[0];
+
+        // Clear expired temporary ban inside this transaction
+        if (driver.ban_type === "temporary" && driver.ban_expires_at !== null) {
+          const [expiredRows] = await connection.execute(
+            `UPDATE drivers
+             SET ban_type = 'none',
+                 ban_expires_at = NULL,
+                 availability_status = 'offline',
+                 available_since = NULL
+             WHERE id = ?
+               AND ban_type = 'temporary'
+               AND ban_expires_at <= NOW()`,
+            [driver.id],
+          );
+
+          if (expiredRows.affectedRows > 0) {
+            driver.ban_type = "none";
+            driver.ban_expires_at = null;
+          }
+        }
+
+        // Lock Session row after Driver row
+        const [currentSessions] = await connection.execute(
+          `SELECT id, driver_id, revoked_at, expires_at
+           FROM auth_sessions
+           WHERE id = ?
+           FOR UPDATE`,
+          [initialSession.id],
+        );
+
+        const currentSession = currentSessions[0];
+
+        if (
+          currentSession &&
+          currentSession.driver_id === driver.id &&
+          currentSession.revoked_at === null &&
+          new Date(currentSession.expires_at).getTime() > Date.now() &&
+          driver.deleted_at === null &&
+          driver.ban_type === "none"
+        ) {
+          await connection.execute(
+            `UPDATE auth_sessions
+             SET last_used_at = NOW()
+             WHERE id = ?`,
+            [currentSession.id],
+          );
+
+          user = {
+            sessionId: currentSession.id,
+            role: "driver",
+            userId: driver.id,
+            fullName: driver.full_name,
+            phoneNumber: driver.phone_number,
+            registrationStatus: driver.registration_status,
+          };
+        } else if (currentSession && currentSession.revoked_at === null) {
+          await connection.execute(
+            `UPDATE auth_sessions
+             SET revoked_at = NOW()
+             WHERE id = ?
+               AND revoked_at IS NULL`,
+            [initialSession.id],
+          );
+        }
+      }
     }
 
-    await pool.execute(
-      `UPDATE auth_sessions
-       SET last_used_at = NOW()
-       WHERE id = ?`,
-      [session.session_id],
-    );
+    // 3. Admin session validation
+    else if (initialSession.admin_id !== null) {
+      // Lock Admin row first
+      const [admins] = await connection.execute(
+        `SELECT id, username, email, is_active
+         FROM admins
+         WHERE id = ?
+         FOR UPDATE`,
+        [initialSession.admin_id],
+      );
 
-    return {
-      sessionId: session.session_id,
-      role: "driver",
-      userId: driver.id,
-      fullName: driver.full_name,
-      phoneNumber: driver.phone_number,
-      registrationStatus: driver.registration_status,
-    };
+      // Lock Session row after Admin row
+      const [currentSessions] = await connection.execute(
+        `SELECT id, admin_id, revoked_at, expires_at
+         FROM auth_sessions
+         WHERE id = ?
+         FOR UPDATE`,
+        [initialSession.id],
+      );
+
+      const currentSession = currentSessions[0];
+      const admin = admins[0];
+
+      if (
+        currentSession &&
+        admin &&
+        currentSession.admin_id === admin.id &&
+        currentSession.revoked_at === null &&
+        new Date(currentSession.expires_at).getTime() > Date.now() &&
+        admin.is_active
+      ) {
+        await connection.execute(
+          `UPDATE auth_sessions
+           SET last_used_at = NOW()
+           WHERE id = ?`,
+          [currentSession.id],
+        );
+
+        user = {
+          sessionId: currentSession.id,
+          role: "admin",
+          userId: admin.id,
+          username: admin.username,
+          email: admin.email,
+        };
+      } else if (currentSession && currentSession.revoked_at === null) {
+        await connection.execute(
+          `UPDATE auth_sessions
+           SET revoked_at = NOW()
+           WHERE id = ?
+             AND revoked_at IS NULL`,
+          [initialSession.id],
+        );
+      }
+    }
+
+    await connection.commit();
+
+    return user;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
-
-  return null;
 };
 
 // Revoke a session
@@ -211,6 +324,129 @@ export const revokeSession = async (rawToken) => {
        AND revoked_at IS NULL`,
     [tokenHash],
   );
+};
+
+export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
+  if (!rawToken || !["cookie", "bearer"].includes(authMethod)) {
+    throw new Error("Invalid logout credentials.");
+  }
+
+  if (!["admin", "driver"].includes(role) || !userId) {
+    throw new Error("Invalid logout user.");
+  }
+
+  const tokenHash = hashSessionToken(rawToken);
+  const connection = await pool.getConnection();
+
+  let transactionStarted = false;
+
+  try {
+    // Find the session without locking it first.
+    const [sessions] = await connection.execute(
+      `SELECT id, admin_id, driver_id
+       FROM auth_sessions
+       WHERE token_hash = ? AND auth_method = ?
+       LIMIT 1`,
+      [tokenHash, authMethod],
+    );
+
+    if (sessions.length === 0) {
+      return false;
+    }
+
+    const session = sessions[0];
+
+    await connection.beginTransaction();
+    transactionStarted = true;
+
+    let ownerExists = false;
+
+    if (role === "driver") {
+      // Lock Driver first to maintain consistent lock order.
+      const [drivers] = await connection.execute(
+        `SELECT id
+         FROM drivers
+         WHERE id = ?
+         FOR UPDATE`,
+        [userId],
+      );
+
+      ownerExists =
+        drivers.length > 0 && String(session.driver_id) === String(userId);
+    } else {
+      // Admin row is locked before its session.
+      const [admins] = await connection.execute(
+        `SELECT id
+         FROM admins
+         WHERE id = ?
+         FOR UPDATE`,
+        [userId],
+      );
+
+      ownerExists =
+        admins.length > 0 && String(session.admin_id) === String(userId);
+    }
+
+    // Lock the session after locking its owner.
+    const [currentSessions] = await connection.execute(
+      `SELECT id, admin_id, driver_id, revoked_at
+       FROM auth_sessions
+       WHERE id = ?
+       FOR UPDATE`,
+      [session.id],
+    );
+
+    if (currentSessions.length === 0) {
+      await connection.commit();
+      transactionStarted = false;
+      return false;
+    }
+
+    const currentSession = currentSessions[0];
+
+    const correctOwner =
+      role === "driver"
+        ? String(currentSession.driver_id) === String(userId)
+        : String(currentSession.admin_id) === String(userId);
+
+    if (!ownerExists || !correctOwner) {
+      await connection.commit();
+      transactionStarted = false;
+      return false;
+    }
+
+    // Revoke the current session.
+    await connection.execute(
+      `UPDATE auth_sessions
+       SET revoked_at = COALESCE(revoked_at, NOW())
+       WHERE id = ?`,
+      [currentSession.id],
+    );
+
+    // Driver logout must always set the Driver Offline.
+    if (role === "driver") {
+      await connection.execute(
+        `UPDATE drivers
+         SET availability_status = 'offline',
+             available_since = NULL
+         WHERE id = ?`,
+        [userId],
+      );
+    }
+
+    await connection.commit();
+    transactionStarted = false;
+
+    return true;
+  } catch (error) {
+    if (transactionStarted) {
+      await connection.rollback();
+    }
+
+    throw error;
+  } finally {
+    connection.release();
+  }
 };
 
 // Admin login credential verification

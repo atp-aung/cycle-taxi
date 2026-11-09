@@ -3,6 +3,7 @@ import { findActiveSession } from "../services/authService.js";
 const COOKIE_NAME = process.env.COOKIE_NAME || "mtb_session";
 
 // Authenticate user using Cookie or Bearer Token
+
 export const authenticate = async (req, res, next) => {
   try {
     let token = null;
@@ -11,7 +12,14 @@ export const authenticate = async (req, res, next) => {
     const authorization = req.headers.authorization;
 
     // Mobile App: Bearer Token
-    if (authorization?.startsWith("Bearer ")) {
+    if (authorization !== undefined) {
+      if (!authorization.startsWith("Bearer ")) {
+        return res.status(401).json({
+          success: false,
+          message: "Invalid authorization header.",
+        });
+      }
+
       token = authorization.slice(7).trim();
       authMethod = "bearer";
     } else {
@@ -40,9 +48,9 @@ export const authenticate = async (req, res, next) => {
     req.authToken = token;
     req.authMethod = authMethod;
 
-    next();
+    return next();
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 

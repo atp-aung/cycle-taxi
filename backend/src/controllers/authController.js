@@ -6,7 +6,8 @@ import {
 
 import pool from "../config/database.js";
 import { getCookieOptions } from "../config/cookie.js";
-import { revokeSession } from "../services/authService.js";
+// import { revokeSession } from "../services/authService.js";
+import { logoutSession } from "../services/authService.js";
 
 import { getClearCookieOptions } from "../config/cookie.js";
 
@@ -131,34 +132,17 @@ export const logout = async (req, res, next) => {
   try {
     const COOKIE_NAME = process.env.COOKIE_NAME || "mtb_session";
 
-    let token = null;
+    await logoutSession({
+      rawToken: req.authToken,
+      authMethod: req.authMethod,
+      role: req.user.role,
+      userId: req.user.userId,
+    });
 
-    const authorization = req.headers.authorization;
-
-    if (authorization?.startsWith("Bearer ")) {
-      token = authorization.slice(7).trim();
-    } else {
-      token = req.cookies?.[COOKIE_NAME];
+    // Clear Cookie only for Cookie authentication.
+    if (req.authMethod === "cookie") {
+      res.clearCookie(COOKIE_NAME, getClearCookieOptions());
     }
-
-    if (token) {
-      await revokeSession(token);
-    }
-
-    // Driver logout must set Offline
-    if (req.user?.role === "driver") {
-      const pool = (await import("../config/database.js")).default;
-
-      await pool.execute(
-        `UPDATE drivers
-         SET availability_status = 'offline',
-             available_since = NULL
-         WHERE id = ?`,
-        [req.user.userId],
-      );
-    }
-
-    res.clearCookie(COOKIE_NAME, getClearCookieOptions());
 
     return sendSuccess(res, "Logout successful.", null);
   } catch (error) {
