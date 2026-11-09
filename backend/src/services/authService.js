@@ -4,6 +4,7 @@ import {
   hashSessionToken,
 } from "../utils/sessionToken.js";
 import { comparePassword } from "../utils/password.js";
+import { clearExpiredTemporaryBan } from "./driverBanService.js";
 
 const SESSION_TTL_HOURS = Number(process.env.SESSION_TTL_HOURS || 24);
 
@@ -80,7 +81,7 @@ export const createSession = async ({
 };
 
 // Find and validate an active session
-export const findActiveSession = async (rawToken) => {
+export const findActiveSession = async (rawToken, authMethod) => {
   if (!rawToken || !["cookie", "bearer"].includes(authMethod)) {
     return null;
   }
@@ -93,19 +94,11 @@ export const findActiveSession = async (rawToken) => {
        s.admin_id,
        s.driver_id,
        s.auth_method,
-       s.expires_at,
        a.username,
        a.email,
-       a.is_active AS admin_is_active,
-       d.full_name,
-       d.phone_number,
-       d.registration_status,
-       d.ban_type,
-       d.ban_expires_at,
-       d.deleted_at
+       a.is_active AS admin_is_active
      FROM auth_sessions s
      LEFT JOIN admins a ON a.id = s.admin_id
-     LEFT JOIN drivers d ON d.id = s.driver_id
      WHERE s.token_hash = ?
        AND s.auth_method = ?
        AND s.revoked_at IS NULL
@@ -118,8 +111,25 @@ export const findActiveSession = async (rawToken) => {
 
   const session = rows[0];
 
+  // Admin session validation
   if (session.admin_id !== null) {
-    if (!session.admin_is_active) return null;
+    if (!session.admin_is_active) {
+      await pool.execute(
+        `UPDATE auth_sessions
+         SET revoked_at = NOW()
+         WHERE id = ? AND revoked_at IS NULL`,
+        [session.session_id],
+      );
+
+      return null;
+    }
+
+    await pool.execute(
+      `UPDATE auth_sessions
+       SET last_used_at = NOW()
+       WHERE id = ?`,
+      [session.session_id],
+    );
 
     return {
       sessionId: session.session_id,
@@ -130,44 +140,62 @@ export const findActiveSession = async (rawToken) => {
     };
   }
 
-  // Deleted drivers cannot use their sessions
-  if (session.deleted_at !== null) return null;
+  // Driver session validation
+  if (session.driver_id !== null) {
+    // Clear expired temporary ban
+    await clearExpiredTemporaryBan(session.driver_id);
 
-  // A temporary ban that has expired can be cleared
-  if (
-    session.ban_type === "temporary" &&
-    session.ban_expires_at &&
-    new Date(session.ban_expires_at) <= new Date()
-  ) {
-    await pool.execute(
-      `UPDATE drivers
-       SET ban_type = 'none',
-           ban_expires_at = NULL,
-           availability_status = 'offline',
-           available_since = NULL
-       WHERE id = ?`,
+    // Read the latest Driver status
+    const [driverRows] = await pool.execute(
+      `SELECT
+         id,
+         full_name,
+         phone_number,
+         registration_status,
+         ban_type,
+         deleted_at
+       FROM drivers
+       WHERE id = ?
+       LIMIT 1`,
       [session.driver_id],
     );
-  } else if (session.ban_type !== "none") {
-    return null;
+
+    if (driverRows.length === 0) {
+      return null;
+    }
+
+    const driver = driverRows[0];
+
+    // Deleted or currently banned Driver
+    if (driver.deleted_at !== null || driver.ban_type !== "none") {
+      await pool.execute(
+        `UPDATE auth_sessions
+         SET revoked_at = NOW()
+         WHERE id = ? AND revoked_at IS NULL`,
+        [session.session_id],
+      );
+
+      return null;
+    }
+
+    await pool.execute(
+      `UPDATE auth_sessions
+       SET last_used_at = NOW()
+       WHERE id = ?`,
+      [session.session_id],
+    );
+
+    return {
+      sessionId: session.session_id,
+      role: "driver",
+      userId: driver.id,
+      fullName: driver.full_name,
+      phoneNumber: driver.phone_number,
+      registrationStatus: driver.registration_status,
+    };
   }
 
-  // Update session activity
-  await pool.execute(
-    `UPDATE auth_sessions
-     SET last_used_at = NOW()
-     WHERE id = ?`,
-    [session.session_id],
-  );
-
-  return {
-    sessionId: session.session_id,
-    role: "driver",
-    userId: session.driver_id,
-    fullName: session.full_name,
-    phoneNumber: session.phone_number,
-    registrationStatus: session.registration_status,
-  };
+  return null;
 };
 
 // Revoke a session
@@ -221,8 +249,6 @@ export const verifyDriverCredentials = async (phoneNumber, password) => {
        phone_number,
        password_hash,
        registration_status,
-       ban_type,
-       ban_expires_at,
        deleted_at
      FROM drivers
      WHERE phone_number = ?
@@ -234,24 +260,22 @@ export const verifyDriverCredentials = async (phoneNumber, password) => {
 
   const driver = rows[0];
 
+  // Deleted accounts cannot login
   if (driver.deleted_at !== null) return null;
 
-  // Expired temporary ban can be cleared
-  if (
-    driver.ban_type === "temporary" &&
-    driver.ban_expires_at &&
-    new Date(driver.ban_expires_at) <= new Date()
-  ) {
-    await pool.execute(
-      `UPDATE drivers
-       SET ban_type = 'none',
-           ban_expires_at = NULL,
-           availability_status = 'offline',
-           available_since = NULL
-       WHERE id = ?`,
-      [driver.id],
-    );
-  } else if (driver.ban_type !== "none") {
+  // Clear expired temporary ban if applicable
+  await clearExpiredTemporaryBan(driver.id);
+
+  // Always read the latest ban status from database
+  const [statusRows] = await pool.execute(
+    `SELECT ban_type
+     FROM drivers
+     WHERE id = ?
+     LIMIT 1`,
+    [driver.id],
+  );
+
+  if (statusRows.length === 0 || statusRows[0].ban_type !== "none") {
     return null;
   }
 
