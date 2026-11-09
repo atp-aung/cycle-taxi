@@ -11,6 +11,7 @@ import healthRoutes from "./routes/healthRoutes.js";
 
 import notFoundMiddleware from "./middleware/notFoundMiddleware.js";
 import errorMiddleware from "./middleware/errorMiddleware.js";
+import authRoutes from "./routes/authRoutes.js";
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use("/api", apiLimiter);
 
 // API Routes
 app.use("/api/v1/health", healthRoutes);
+app.use("/api/v1/auth", authRoutes);
 
 // 404 Handler
 app.use(notFoundMiddleware);
