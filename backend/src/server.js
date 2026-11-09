@@ -5,6 +5,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 
+import cookieParser from "cookie-parser";
 import pool from "./config/database.js";
 import healthRoutes from "./routes/healthRoutes.js";
 
@@ -42,6 +43,8 @@ app.use(
 
 // Security Headers
 app.use(helmet());
+
+app.use(cookieParser());
 
 // Request Body Limit
 app.use(express.json({ limit: "10kb" }));
