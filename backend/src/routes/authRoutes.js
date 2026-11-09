@@ -1,7 +1,15 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 
-import { loginAdmin, loginDriver } from "../controllers/authController.js";
+import {
+  loginAdmin,
+  loginDriver,
+  getMe,
+  logout,
+} from "../controllers/authController.js";
+import { authenticate } from "../middleware/authMiddleware.js";
+import { getCsrfToken } from "../controllers/csrfController.js";
+import { csrfProtection } from "../middleware/csrfMiddleware.js";
 
 const router = express.Router();
 
@@ -17,7 +25,11 @@ const loginLimiter = rateLimit({
   },
 });
 
+router.get("/csrf-token", getCsrfToken);
+
 router.post("/admin/login", loginLimiter, loginAdmin);
 router.post("/driver/login", loginLimiter, loginDriver);
+router.get("/me", authenticate, getMe);
+router.post("/logout", authenticate, logout);
 
 export default router;

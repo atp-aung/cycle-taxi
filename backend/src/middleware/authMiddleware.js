@@ -37,6 +37,8 @@ export const authenticate = async (req, res, next) => {
     }
 
     req.user = user;
+    req.authToken = token;
+    req.authMethod = authMethod;
 
     next();
   } catch (error) {

@@ -4,7 +4,13 @@ import {
   createSession,
 } from "../services/authService.js";
 
+import pool from "../config/database.js";
 import { getCookieOptions } from "../config/cookie.js";
+import { revokeSession } from "../services/authService.js";
+
+import { getClearCookieOptions } from "../config/cookie.js";
+
+import { sendSuccess } from "../utils/apiResponse.js";
 
 const COOKIE_NAME = process.env.COOKIE_NAME || "mtb_session";
 
@@ -108,6 +114,87 @@ export const loginDriver = async (req, res, next) => {
         expiresAt: session.expiresAt,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get current authenticated user
+export const getMe = async (req, res) => {
+  return sendSuccess(res, "Current user retrieved successfully.", {
+    user: req.user,
+  });
+};
+
+// Logout current user
+export const logout = async (req, res, next) => {
+  try {
+    const COOKIE_NAME = process.env.COOKIE_NAME || "mtb_session";
+
+    let token = null;
+
+    const authorization = req.headers.authorization;
+
+    if (authorization?.startsWith("Bearer ")) {
+      token = authorization.slice(7).trim();
+    } else {
+      token = req.cookies?.[COOKIE_NAME];
+    }
+
+    if (token) {
+      await revokeSession(token);
+    }
+
+    // Driver logout must set Offline
+    if (req.user?.role === "driver") {
+      const pool = (await import("../config/database.js")).default;
+
+      await pool.execute(
+        `UPDATE drivers
+         SET availability_status = 'offline',
+             available_since = NULL
+         WHERE id = ?`,
+        [req.user.userId],
+      );
+    }
+
+    res.clearCookie(COOKIE_NAME, getClearCookieOptions());
+
+    return sendSuccess(res, "Logout successful.", null);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /auth/me
+export const getMe = async (req, res) => {
+  return sendSuccess(res, "Current user retrieved successfully.", {
+    user: req.user,
+  });
+};
+
+// POST /auth/logout
+export const logout = async (req, res, next) => {
+  try {
+    await revokeSession(req.authToken);
+
+    if (req.user.role === "driver") {
+      await pool.execute(
+        `UPDATE drivers
+         SET availability_status = 'offline',
+             available_since = NULL
+         WHERE id = ?`,
+        [req.user.userId],
+      );
+    }
+
+    if (req.authMethod === "cookie") {
+      const cookieName = process.env.COOKIE_NAME || "mtb_session";
+
+      res.clearCookie(cookieName, getClearCookieOptions());
+    }
+
+    return sendSuccess(res, "Logout successful.", null);
   } catch (error) {
     next(error);
   }
