@@ -15,9 +15,31 @@ import { sendSuccess } from "../utils/apiResponse.js";
 
 const COOKIE_NAME = process.env.COOKIE_NAME || "mtb_session";
 
+const getRequestedAuthMethod = (req) => {
+  const authMethod = req.get("X-Auth-Method");
+
+  if (!authMethod) {
+    return "cookie";
+  }
+
+  if (authMethod === "cookie" || authMethod === "bearer") {
+    return authMethod;
+  }
+
+  return null;
+};
+
 // Admin Login
 export const loginAdmin = async (req, res, next) => {
   try {
+    const authMethod = getRequestedAuthMethod(req);
+
+    if (!authMethod) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid authentication method.",
+      });
+    }
     const { username, password } = req.body;
 
     if (
@@ -44,10 +66,12 @@ export const loginAdmin = async (req, res, next) => {
     const session = await createSession({
       role: "admin",
       userId: admin.id,
-      authMethod: "cookie",
+      authMethod,
     });
 
-    res.cookie(COOKIE_NAME, session.token, getCookieOptions());
+    if (authMethod === "cookie") {
+      res.cookie(COOKIE_NAME, session.token, getCookieOptions());
+    }
 
     return res.status(200).json({
       success: true,
@@ -59,6 +83,10 @@ export const loginAdmin = async (req, res, next) => {
           email: admin.email,
           role: "admin",
         },
+        ...(authMethod === "bearer" && {
+          accessToken: session.token,
+          tokenType: "Bearer",
+        }),
         expiresAt: session.expiresAt,
       },
     });
@@ -70,6 +98,14 @@ export const loginAdmin = async (req, res, next) => {
 // Driver Login
 export const loginDriver = async (req, res, next) => {
   try {
+    const authMethod = getRequestedAuthMethod(req);
+
+    if (!authMethod) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid authentication method.",
+      });
+    }
     const { phoneNumber, password } = req.body;
 
     if (
@@ -96,10 +132,12 @@ export const loginDriver = async (req, res, next) => {
     const session = await createSession({
       role: "driver",
       userId: driver.id,
-      authMethod: "cookie",
+      authMethod,
     });
 
-    res.cookie(COOKIE_NAME, session.token, getCookieOptions());
+    if (authMethod === "cookie") {
+      res.cookie(COOKIE_NAME, session.token, getCookieOptions());
+    }
 
     return res.status(200).json({
       success: true,
@@ -112,6 +150,10 @@ export const loginDriver = async (req, res, next) => {
           registrationStatus: driver.registrationStatus,
           role: "driver",
         },
+        ...(authMethod === "bearer" && {
+          accessToken: session.token,
+          tokenType: "Bearer",
+        }),
         expiresAt: session.expiresAt,
       },
     });

@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 const CSRF_COOKIE = "mtb_csrf";
 const SAFE_METHODS = ["GET", "HEAD", "OPTIONS"];
+
 const isValidCsrfToken = (token) =>
   typeof token === "string" && /^[a-f0-9]{64}$/i.test(token);
 
@@ -10,11 +11,8 @@ export const csrfProtection = (req, res, next) => {
     return next();
   }
 
-  // Bearer tokens are not automatically sent by browsers
-  // like cookies, so this CSRF check is for cookie auth.
-  const authorization = req.headers.authorization;
-
-  if (authorization?.startsWith("Bearer ")) {
+  // Skip CSRF only after Bearer authentication succeeds.
+  if (req.authMethod === "bearer") {
     return next();
   }
 
@@ -28,18 +26,15 @@ export const csrfProtection = (req, res, next) => {
     });
   }
 
-  const cookieBuffer = Buffer.from(cookieToken);
-  const headerBuffer = Buffer.from(headerToken);
+  const cookieBuffer = Buffer.from(cookieToken, "hex");
+  const headerBuffer = Buffer.from(headerToken, "hex");
 
-  if (
-    cookieBuffer.length !== headerBuffer.length ||
-    !timingSafeEqual(cookieBuffer, headerBuffer)
-  ) {
+  if (!timingSafeEqual(cookieBuffer, headerBuffer)) {
     return res.status(403).json({
       success: false,
       message: "Invalid CSRF token.",
     });
   }
 
-  next();
+  return next();
 };
