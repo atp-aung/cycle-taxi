@@ -1,14 +1,34 @@
-export const getCookieOptions = () => ({
-  httpOnly: true,
+const getSessionTtlHours = () => {
+  const hours = Number(process.env.SESSION_TTL_HOURS || 24);
 
-  secure: process.env.COOKIE_SECURE === "true",
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw new Error("SESSION_TTL_HOURS must be a positive number.");
+  }
 
-  sameSite: process.env.COOKIE_SAME_SITE || "lax",
+  return hours;
+};
 
-  path: "/",
+export const getCookieOptions = () => {
+  const sameSite = (process.env.COOKIE_SAME_SITE || "lax").toLowerCase();
 
-  maxAge: Number(process.env.SESSION_TTL_HOURS || 24) * 60 * 60 * 1000,
-});
+  if (!["strict", "lax", "none"].includes(sameSite)) {
+    throw new Error("Invalid COOKIE_SAME_SITE value.");
+  }
+
+  const secure = process.env.COOKIE_SECURE === "true";
+
+  if (sameSite === "none" && !secure) {
+    throw new Error("SameSite=None requires COOKIE_SECURE=true.");
+  }
+
+  return {
+    httpOnly: true,
+    secure,
+    sameSite,
+    path: "/",
+    maxAge: getSessionTtlHours() * 60 * 60 * 1000,
+  };
+};
 
 export const getClearCookieOptions = () => {
   const options = getCookieOptions();

@@ -1,21 +1,74 @@
 import pool from "../config/database.js";
 
 // Clear an expired temporary ban
-export const clearExpiredTemporaryBan = async (driverId) => {
-  const [result] = await pool.execute(
-    `UPDATE drivers
-     SET ban_type = 'none',
-         ban_expires_at = NULL,
-         availability_status = 'offline',
-         available_since = NULL
-     WHERE id = ?
-       AND ban_type = 'temporary'
-       AND ban_expires_at IS NOT NULL
-       AND ban_expires_at <= NOW()`,
-    [driverId],
-  );
 
-  return result.affectedRows > 0;
+export const clearExpiredTemporaryBan = async (driverId, connection = null) => {
+  const executor = connection || (await pool.getConnection());
+  const ownsConnection = !connection;
+
+  try {
+    if (ownsConnection) {
+      await executor.beginTransaction();
+    }
+
+    // Lock Driver row
+    const [drivers] = await executor.execute(
+      `SELECT id
+       FROM drivers
+       WHERE id = ?
+       FOR UPDATE`,
+      [driverId],
+    );
+
+    if (drivers.length === 0) {
+      if (ownsConnection) await executor.commit();
+      return false;
+    }
+
+    // Clear expired temporary ban
+    const [result] = await executor.execute(
+      `UPDATE drivers
+       SET ban_type = 'none',
+           ban_expires_at = NULL,
+           availability_status = 'offline',
+           available_since = NULL
+       WHERE id = ?
+         AND ban_type = 'temporary'
+         AND ban_expires_at IS NOT NULL
+         AND ban_expires_at <= NOW()`,
+      [driverId],
+    );
+
+    if (result.affectedRows > 0) {
+      // Close expired ban history
+      await executor.execute(
+        `UPDATE driver_ban_history
+         SET ended_at = NOW()
+         WHERE driver_id = ?
+           AND ban_type = 'temporary'
+           AND ended_at IS NULL
+           AND expires_at IS NOT NULL
+           AND expires_at <= NOW()`,
+        [driverId],
+      );
+    }
+
+    if (ownsConnection) {
+      await executor.commit();
+    }
+
+    return result.affectedRows > 0;
+  } catch (error) {
+    if (ownsConnection) {
+      await executor.rollback();
+    }
+
+    throw error;
+  } finally {
+    if (ownsConnection) {
+      executor.release();
+    }
+  }
 };
 
 // Admin bans a Driver

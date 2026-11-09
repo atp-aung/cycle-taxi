@@ -43,12 +43,15 @@ export const createSession = async ({
     await connection.beginTransaction();
 
     if (role === "driver") {
-      // Lock Driver row and check current account status
+      // Clear expired temporary ban using the current transaction.
+      await clearExpiredTemporaryBan(userId, connection);
+
+      // Re-check Driver account status after clearing expired ban.
       const [drivers] = await connection.execute(
         `SELECT id, deleted_at, ban_type
-         FROM drivers
-         WHERE id = ?
-         FOR UPDATE`,
+     FROM drivers
+     WHERE id = ?
+     FOR UPDATE`,
         [userId],
       );
 
@@ -60,21 +63,21 @@ export const createSession = async ({
         throw new Error("Banned Driver cannot create a session.");
       }
 
-      // Revoke all previous active Driver sessions
+      // Revoke all previous active Driver sessions.
       await connection.execute(
         `UPDATE auth_sessions
-         SET revoked_at = NOW()
-         WHERE driver_id = ?
-           AND revoked_at IS NULL`,
+     SET revoked_at = NOW()
+     WHERE driver_id = ?
+       AND revoked_at IS NULL`,
         [userId],
       );
 
-      // Every new Driver login starts Offline
+      // Every new Driver login starts Offline.
       await connection.execute(
         `UPDATE drivers
-         SET availability_status = 'offline',
-             available_since = NULL
-         WHERE id = ?`,
+     SET availability_status = 'offline',
+         available_since = NULL
+     WHERE id = ?`,
         [userId],
       );
     }
@@ -110,7 +113,12 @@ export const createSession = async ({
       expiresAt,
     };
   } catch (error) {
-    await connection.rollback();
+    try {
+      await connection.rollback();
+    } catch (rollbackError) {
+      console.error("Transaction rollback failed:", rollbackError);
+    }
+
     throw error;
   } finally {
     connection.release();
