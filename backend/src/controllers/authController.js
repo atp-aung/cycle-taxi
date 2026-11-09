@@ -165,37 +165,3 @@ export const logout = async (req, res, next) => {
     next(error);
   }
 };
-
-// GET /auth/me
-export const getMe = async (req, res) => {
-  return sendSuccess(res, "Current user retrieved successfully.", {
-    user: req.user,
-  });
-};
-
-// POST /auth/logout
-export const logout = async (req, res, next) => {
-  try {
-    await revokeSession(req.authToken);
-
-    if (req.user.role === "driver") {
-      await pool.execute(
-        `UPDATE drivers
-         SET availability_status = 'offline',
-             available_since = NULL
-         WHERE id = ?`,
-        [req.user.userId],
-      );
-    }
-
-    if (req.authMethod === "cookie") {
-      const cookieName = process.env.COOKIE_NAME || "mtb_session";
-
-      res.clearCookie(cookieName, getClearCookieOptions());
-    }
-
-    return sendSuccess(res, "Logout successful.", null);
-  } catch (error) {
-    next(error);
-  }
-};
