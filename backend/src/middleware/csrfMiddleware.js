@@ -2,6 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 
 const CSRF_COOKIE = "mtb_csrf";
 const SAFE_METHODS = ["GET", "HEAD", "OPTIONS"];
+const isValidCsrfToken = (token) =>
+  typeof token === "string" && /^[a-f0-9]{64}$/i.test(token);
 
 export const csrfProtection = (req, res, next) => {
   if (SAFE_METHODS.includes(req.method)) {
@@ -19,10 +21,10 @@ export const csrfProtection = (req, res, next) => {
   const cookieToken = req.cookies?.[CSRF_COOKIE];
   const headerToken = req.headers["x-csrf-token"];
 
-  if (typeof cookieToken !== "string" || typeof headerToken !== "string") {
+  if (!isValidCsrfToken(cookieToken) || !isValidCsrfToken(headerToken)) {
     return res.status(403).json({
       success: false,
-      message: "CSRF token missing.",
+      message: "CSRF token missing or invalid.",
     });
   }
 

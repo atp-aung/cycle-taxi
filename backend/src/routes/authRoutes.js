@@ -27,9 +27,10 @@ const loginLimiter = rateLimit({
 
 router.get("/csrf-token", getCsrfToken);
 
-router.post("/admin/login", loginLimiter, loginAdmin);
-router.post("/driver/login", loginLimiter, loginDriver);
+router.post("/admin/login", loginLimiter, csrfProtection, loginAdmin);
+router.post("/driver/login", loginLimiter, csrfProtection, loginDriver);
 router.get("/me", authenticate, getMe);
-router.post("/logout", authenticate, logout);
+
+router.post("/logout", authenticate, csrfProtection, logout);
 
 export default router;
