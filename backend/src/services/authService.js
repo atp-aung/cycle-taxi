@@ -5,6 +5,7 @@ import {
 } from "../utils/sessionToken.js";
 import { comparePassword } from "../utils/password.js";
 import { clearExpiredTemporaryBan } from "./driverBanService.js";
+import ApiError from "../utils/ApiError.js";
 
 const SESSION_TTL_HOURS = Number(process.env.SESSION_TTL_HOURS || 24);
 
@@ -17,19 +18,19 @@ export const createSession = async ({
 }) => {
   // Validate inputs
   if (!["admin", "driver"].includes(role)) {
-    throw new Error("Invalid session role.");
+    throw new ApiError(400, "Invalid session role.");
   }
 
   if (!["cookie", "bearer"].includes(authMethod)) {
-    throw new Error("Invalid authentication method.");
+    throw new ApiError(400, "Invalid authentication method.");
   }
 
   if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) {
-    throw new Error("Invalid user ID.");
+    throw new ApiError(400, "Invalid user ID.");
   }
 
   if (!Number.isFinite(SESSION_TTL_HOURS) || SESSION_TTL_HOURS <= 0) {
-    throw new Error("Invalid session expiration setting.");
+    throw new ApiError(500, "Invalid session expiration setting.");
   }
 
   const rawToken = generateSessionToken();
@@ -56,11 +57,11 @@ export const createSession = async ({
       );
 
       if (drivers.length === 0 || drivers[0].deleted_at !== null) {
-        throw new Error("Driver account not found or deleted.");
+        throw new ApiError(401, "Driver account is unavailable.");
       }
 
       if (drivers[0].ban_type !== "none") {
-        throw new Error("Banned Driver cannot create a session.");
+        throw new ApiError(403, "Banned Driver cannot create a session.");
       }
 
       // Revoke all previous active Driver sessions.
@@ -93,7 +94,7 @@ export const createSession = async ({
       );
 
       if (admins.length === 0 || !admins[0].is_active) {
-        throw new Error("Admin account not found or inactive.");
+        throw new ApiError(401, "Admin account is unavailable.");
       }
     }
 
@@ -134,6 +135,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
 
   const tokenHash = hashSessionToken(rawToken);
   const connection = await pool.getConnection();
+  let transactionStarted = false;
 
   try {
     // 1. Find session owner without locking
@@ -153,6 +155,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
     const initialSession = sessionRows[0];
 
     await connection.beginTransaction();
+    transactionStarted = true;
 
     let user = null;
 
@@ -161,16 +164,21 @@ export const findActiveSession = async (rawToken, authMethod) => {
       // Lock Driver row first
       const [drivers] = await connection.execute(
         `SELECT
-           id,
-           full_name,
-           phone_number,
-           registration_status,
-           ban_type,
-           ban_expires_at,
-           deleted_at
-         FROM drivers
-         WHERE id = ?
-         FOR UPDATE`,
+     id,
+     full_name,
+     phone_number,
+     registration_status,
+     ban_type,
+     ban_expires_at,
+     deleted_at,
+     (
+       ban_type = 'temporary'
+       AND ban_expires_at IS NOT NULL
+       AND ban_expires_at <= NOW()
+     ) AS ban_expired
+   FROM drivers
+   WHERE id = ?
+   FOR UPDATE`,
         [initialSession.driver_id],
       );
 
@@ -187,22 +195,20 @@ export const findActiveSession = async (rawToken, authMethod) => {
         const driver = drivers[0];
 
         // Clear expired temporary ban inside this transaction
-        if (driver.ban_type === "temporary" && driver.ban_expires_at !== null) {
-          const [expiredRows] = await connection.execute(
-            `UPDATE drivers
-             SET ban_type = 'none',
-                 ban_expires_at = NULL,
-                 availability_status = 'offline',
-                 available_since = NULL
-             WHERE id = ?
-               AND ban_type = 'temporary'
-               AND ban_expires_at <= NOW()`,
+        if (Boolean(driver.ban_expired)) {
+          await clearExpiredTemporaryBan(driver.id, connection);
+
+          const [updatedDrivers] = await connection.execute(
+            `SELECT ban_type, ban_expires_at
+     FROM drivers
+     WHERE id = ?
+     FOR UPDATE`,
             [driver.id],
           );
 
-          if (expiredRows.affectedRows > 0) {
-            driver.ban_type = "none";
-            driver.ban_expires_at = null;
+          if (updatedDrivers.length > 0) {
+            driver.ban_type = updatedDrivers[0].ban_type;
+            driver.ban_expires_at = updatedDrivers[0].ban_expires_at;
           }
         }
 
@@ -219,7 +225,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
 
         if (
           currentSession &&
-          currentSession.driver_id === driver.id &&
+          String(currentSession.driver_id) === String(driver.id) &&
           currentSession.revoked_at === null &&
           new Date(currentSession.expires_at).getTime() > Date.now() &&
           driver.deleted_at === null &&
@@ -278,7 +284,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
       if (
         currentSession &&
         admin &&
-        currentSession.admin_id === admin.id &&
+        String(currentSession.admin_id) === String(admin.id) &&
         currentSession.revoked_at === null &&
         new Date(currentSession.expires_at).getTime() > Date.now() &&
         admin.is_active
@@ -312,7 +318,14 @@ export const findActiveSession = async (rawToken, authMethod) => {
 
     return user;
   } catch (error) {
-    await connection.rollback();
+    try {
+      if (transactionStarted) {
+        await connection.rollback();
+      }
+    } catch (rollbackError) {
+      console.error("Transaction rollback failed:", rollbackError);
+    }
+
     throw error;
   } finally {
     connection.release();
@@ -411,7 +424,12 @@ export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
     }
 
     const currentSession = currentSessions[0];
-
+    // Do not process an already revoked session.
+    if (currentSession.revoked_at !== null) {
+      await connection.commit();
+      transactionStarted = false;
+      return false;
+    }
     const correctOwner =
       role === "driver"
         ? String(currentSession.driver_id) === String(userId)
