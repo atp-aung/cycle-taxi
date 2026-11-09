@@ -3,6 +3,7 @@ import {
   generateSessionToken,
   hashSessionToken,
 } from "../utils/sessionToken.js";
+import { comparePassword } from "../utils/password.js";
 
 const SESSION_TTL_HOURS = Number(process.env.SESSION_TTL_HOURS || 24);
 
@@ -182,4 +183,86 @@ export const revokeSession = async (rawToken) => {
        AND revoked_at IS NULL`,
     [tokenHash],
   );
+};
+
+// Admin login credential verification
+export const verifyAdminCredentials = async (username, password) => {
+  const [rows] = await pool.execute(
+    `SELECT id, username, email, password_hash, is_active
+     FROM admins
+     WHERE username = ? OR email = ?
+     LIMIT 1`,
+    [username, username],
+  );
+
+  if (rows.length === 0) return null;
+
+  const admin = rows[0];
+
+  if (!admin.is_active) return null;
+
+  const passwordIsValid = await comparePassword(password, admin.password_hash);
+
+  if (!passwordIsValid) return null;
+
+  return {
+    id: admin.id,
+    username: admin.username,
+    email: admin.email,
+  };
+};
+
+// Driver login credential verification
+export const verifyDriverCredentials = async (phoneNumber, password) => {
+  const [rows] = await pool.execute(
+    `SELECT
+       id,
+       full_name,
+       phone_number,
+       password_hash,
+       registration_status,
+       ban_type,
+       ban_expires_at,
+       deleted_at
+     FROM drivers
+     WHERE phone_number = ?
+     LIMIT 1`,
+    [phoneNumber],
+  );
+
+  if (rows.length === 0) return null;
+
+  const driver = rows[0];
+
+  if (driver.deleted_at !== null) return null;
+
+  // Expired temporary ban can be cleared
+  if (
+    driver.ban_type === "temporary" &&
+    driver.ban_expires_at &&
+    new Date(driver.ban_expires_at) <= new Date()
+  ) {
+    await pool.execute(
+      `UPDATE drivers
+       SET ban_type = 'none',
+           ban_expires_at = NULL,
+           availability_status = 'offline',
+           available_since = NULL
+       WHERE id = ?`,
+      [driver.id],
+    );
+  } else if (driver.ban_type !== "none") {
+    return null;
+  }
+
+  const passwordIsValid = await comparePassword(password, driver.password_hash);
+
+  if (!passwordIsValid) return null;
+
+  return {
+    id: driver.id,
+    fullName: driver.full_name,
+    phoneNumber: driver.phone_number,
+    registrationStatus: driver.registration_status,
+  };
 };
