@@ -3,6 +3,8 @@ import express from "express";
 import {
   unbanDriverController,
   reassignDriverTaxiGateController,
+  temporaryBanDriverController,
+  permanentBanDriverController,
 } from "../controllers/adminDriverController.js";
 
 import { authenticate, authorize } from "../middleware/authMiddleware.js";
@@ -10,6 +12,24 @@ import { authenticate, authorize } from "../middleware/authMiddleware.js";
 import { csrfProtection } from "../middleware/csrfMiddleware.js";
 
 const router = express.Router();
+
+// Admin Temporary Ban Driver
+router.patch(
+  "/:driverId/temporary-ban",
+  authenticate,
+  csrfProtection,
+  authorize("admin"),
+  temporaryBanDriverController,
+);
+
+// Admin Permanent Ban Driver
+router.patch(
+  "/:driverId/permanent-ban",
+  authenticate,
+  csrfProtection,
+  authorize("admin"),
+  permanentBanDriverController,
+);
 
 // Admin Unban Driver
 router.patch(
@@ -20,7 +40,7 @@ router.patch(
   unbanDriverController,
 );
 
-// Admin Reassign Driver Taxi Gate
+// Admin Reassign Driver to another Taxi Gate
 router.patch(
   "/:driverId/taxi-gate",
   authenticate,
