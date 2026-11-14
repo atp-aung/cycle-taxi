@@ -381,12 +381,27 @@ export const revokeSession = async (rawToken) => {
 };
 
 export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
-  if (!rawToken || !["cookie", "bearer"].includes(authMethod)) {
-    throw new Error("Invalid logout credentials.");
+  if (
+    typeof rawToken !== "string" ||
+    !/^[a-f0-9]{64}$/.test(rawToken) ||
+    !["cookie", "bearer"].includes(authMethod)
+  ) {
+    throw new ApiError(400, "Invalid logout credentials.");
   }
 
-  if (!["admin", "driver"].includes(role) || !userId) {
-    throw new Error("Invalid logout user.");
+  const normalizedUserId =
+    typeof userId === "number"
+      ? userId
+      : typeof userId === "string" && /^\d+$/.test(userId)
+        ? Number(userId)
+        : NaN;
+
+  if (
+    !["admin", "driver"].includes(role) ||
+    !Number.isSafeInteger(normalizedUserId) ||
+    normalizedUserId <= 0
+  ) {
+    throw new ApiError(400, "Invalid logout user.");
   }
 
   const tokenHash = hashSessionToken(rawToken);
