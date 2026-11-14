@@ -437,11 +437,12 @@ export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
          FROM drivers
          WHERE id = ?
          FOR UPDATE`,
-        [userId],
+        [normalizedUserId],
       );
 
       ownerExists =
-        drivers.length > 0 && String(session.driver_id) === String(userId);
+        drivers.length > 0 &&
+        String(session.driver_id) === String(normalizedUserId);
     } else {
       // Admin row is locked before its session.
       const [admins] = await connection.execute(
@@ -449,11 +450,12 @@ export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
          FROM admins
          WHERE id = ?
          FOR UPDATE`,
-        [userId],
+        [normalizedUserId],
       );
 
       ownerExists =
-        admins.length > 0 && String(session.admin_id) === String(userId);
+        admins.length > 0 &&
+        String(session.admin_id) === String(normalizedUserId);
     }
 
     // Lock the session after locking its owner.
@@ -480,8 +482,8 @@ export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
     }
     const correctOwner =
       role === "driver"
-        ? String(currentSession.driver_id) === String(userId)
-        : String(currentSession.admin_id) === String(userId);
+        ? String(currentSession.driver_id) === String(normalizedUserId)
+        : String(currentSession.admin_id) === String(normalizedUserId);
 
     if (!ownerExists || !correctOwner) {
       await connection.commit();
@@ -504,7 +506,7 @@ export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
          SET availability_status = 'offline',
              available_since = NULL
          WHERE id = ?`,
-        [userId],
+        [normalizedUserId],
       );
     }
 
@@ -513,8 +515,12 @@ export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
 
     return true;
   } catch (error) {
-    if (transactionStarted) {
-      await connection.rollback();
+    try {
+      if (transactionStarted) {
+        await connection.rollback();
+      }
+    } catch (rollbackError) {
+      console.error("Transaction rollback failed:", rollbackError);
     }
 
     throw error;
