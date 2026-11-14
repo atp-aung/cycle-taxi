@@ -5,6 +5,7 @@ import {
   reassignDriverTaxiGateController,
   temporaryBanDriverController,
   permanentBanDriverController,
+  getAdminDriversController,
 } from "../controllers/adminDriverController.js";
 
 import { authenticate, authorize } from "../middleware/authMiddleware.js";
@@ -12,6 +13,9 @@ import { authenticate, authorize } from "../middleware/authMiddleware.js";
 import { csrfProtection } from "../middleware/csrfMiddleware.js";
 
 const router = express.Router();
+
+// Admin retrieves Driver list
+router.get("/", authenticate, authorize("admin"), getAdminDriversController);
 
 // Admin Temporary Ban Driver
 router.patch(

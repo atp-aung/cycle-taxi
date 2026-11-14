@@ -286,3 +286,63 @@ export const getAdminDrivers = async ({
     },
   };
 };
+
+export const getAdminDriverDetails = async (driverId) => {
+  if (!Number.isSafeInteger(driverId) || driverId <= 0) {
+    throw new ApiError(400, "Invalid Driver ID.");
+  }
+
+  const [drivers] = await pool.execute(
+    `SELECT
+       d.id,
+       d.full_name,
+       d.phone_number,
+       d.photo_path,
+       d.license_image_path,
+       d.registration_status,
+       d.phone_verified_at,
+       d.license_verified_at,
+       d.approved_at,
+       d.rejection_reason,
+       d.availability_status,
+       d.available_since,
+       d.ban_type,
+       d.ban_expires_at,
+       d.taxi_gate_id,
+       d.approved_by_admin_id,
+       d.created_at,
+       d.updated_at,
+
+       tg.name AS taxi_gate_name,
+       bs.name AS bus_stop_name,
+       tw.name AS township_name,
+
+       a.username AS approved_by_username
+
+     FROM drivers d
+
+     INNER JOIN taxi_gates tg
+       ON d.taxi_gate_id = tg.id
+
+     INNER JOIN bus_stops bs
+       ON tg.bus_stop_id = bs.id
+
+     INNER JOIN townships tw
+       ON bs.township_id = tw.id
+
+     LEFT JOIN admins a
+       ON d.approved_by_admin_id = a.id
+
+     WHERE d.id = ?
+       AND d.deleted_at IS NULL
+
+     LIMIT 1`,
+    [driverId],
+  );
+
+  if (drivers.length === 0) {
+    throw new ApiError(404, "Driver not found.");
+  }
+
+  return drivers[0];
+};
