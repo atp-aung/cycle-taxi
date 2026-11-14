@@ -79,7 +79,7 @@ export const createSession = async ({
       // Revoke all previous active Driver sessions.
       await connection.execute(
         `UPDATE auth_sessions
-     SET revoked_at = NOW()
+     SET revoked_at = UTC_TIMESTAMP()
      WHERE driver_id = ?
        AND revoked_at IS NULL`,
         [normalizedUserId],
@@ -197,7 +197,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
      (
        ban_type = 'temporary'
        AND ban_expires_at IS NOT NULL
-       AND ban_expires_at <= NOW()
+       AND ban_expires_at <= UTC_TIMESTAMP()
      ) AS ban_expired
    FROM drivers
    WHERE id = ?
@@ -209,7 +209,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
         // Driver no longer exists
         await connection.execute(
           `UPDATE auth_sessions
-           SET revoked_at = NOW()
+           SET revoked_at = UTC_TIMESTAMP()
            WHERE id = ?
              AND revoked_at IS NULL`,
           [initialSession.id],
@@ -256,7 +256,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
         ) {
           await connection.execute(
             `UPDATE auth_sessions
-             SET last_used_at = NOW()
+             SET last_used_at = UTC_TIMESTAMP()
              WHERE id = ?`,
             [currentSession.id],
           );
@@ -272,7 +272,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
         } else if (currentSession && currentSession.revoked_at === null) {
           await connection.execute(
             `UPDATE auth_sessions
-             SET revoked_at = NOW()
+             SET revoked_at = UTC_TIMESTAMP()
              WHERE id = ?
                AND revoked_at IS NULL`,
             [initialSession.id],
@@ -307,7 +307,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
       if (!admin) {
         await connection.execute(
           `UPDATE auth_sessions
-     SET revoked_at = NOW()
+     SET revoked_at = UTC_TIMESTAMP()
      WHERE id = ?
        AND revoked_at IS NULL`,
           [initialSession.id],
@@ -324,7 +324,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
       ) {
         await connection.execute(
           `UPDATE auth_sessions
-           SET last_used_at = NOW()
+           SET last_used_at = UTC_TIMESTAMP()
            WHERE id = ?`,
           [currentSession.id],
         );
@@ -339,7 +339,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
       } else if (currentSession && currentSession.revoked_at === null) {
         await connection.execute(
           `UPDATE auth_sessions
-           SET revoked_at = NOW()
+           SET revoked_at = UTC_TIMESTAMP()
            WHERE id = ?
              AND revoked_at IS NULL`,
           [initialSession.id],
@@ -373,7 +373,7 @@ export const revokeSession = async (rawToken) => {
 
   await pool.execute(
     `UPDATE auth_sessions
-     SET revoked_at = NOW()
+     SET revoked_at = UTC_TIMESTAMP()
      WHERE token_hash = ?
        AND revoked_at IS NULL`,
     [tokenHash],
@@ -494,7 +494,7 @@ export const logoutSession = async ({ rawToken, authMethod, role, userId }) => {
     // Revoke the current session.
     await connection.execute(
       `UPDATE auth_sessions
-       SET revoked_at = COALESCE(revoked_at, NOW())
+       SET revoked_at = COALESCE(revoked_at, UTC_TIMESTAMP())
        WHERE id = ?`,
       [currentSession.id],
     );

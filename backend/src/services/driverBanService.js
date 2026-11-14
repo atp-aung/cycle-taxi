@@ -20,25 +20,60 @@ const validateReason = (reason) => {
 
 // Convert Myanmar local ISO datetime with explicit timezone
 // into UTC MySQL DATETIME string.
+
 const convertExpiryToUTC = (value) => {
   if (typeof value !== "string") {
     throw new ApiError(400, "Invalid ban expiry date.");
   }
 
-  // Require ISO 8601 with an explicit timezone offset.
+  // Require Myanmar local ISO 8601 (+06:30)
   const isoPattern =
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\+06:30$/;
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?\+06:30$/;
 
-  if (!isoPattern.test(value)) {
+  const match = value.match(isoPattern);
+
+  if (!match) {
     throw new ApiError(
       400,
-      "Ban expiry must use ISO 8601 format with a timezone offset.",
+      "Ban expiry must use Myanmar local ISO 8601 format (+06:30).",
     );
   }
 
-  const date = new Date(value);
+  const [, year, month, day, hour, minute, second, milliseconds] = match;
 
-  if (Number.isNaN(date.getTime())) {
+  const date = new Date(
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+      Number(milliseconds || 0),
+    ) -
+      (6 * 60 + 30) * 60 * 1000,
+  );
+
+  // Validate the original calendar date and time.
+  const localDate = new Date(
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    ),
+  );
+
+  if (
+    localDate.getUTCFullYear() !== Number(year) ||
+    localDate.getUTCMonth() !== Number(month) - 1 ||
+    localDate.getUTCDate() !== Number(day) ||
+    localDate.getUTCHours() !== Number(hour) ||
+    localDate.getUTCMinutes() !== Number(minute) ||
+    localDate.getUTCSeconds() !== Number(second)
+  ) {
     throw new ApiError(400, "Invalid ban expiry date.");
   }
 
@@ -46,7 +81,6 @@ const convertExpiryToUTC = (value) => {
     throw new ApiError(400, "Ban expiry date must be in the future.");
   }
 
-  // Convert to UTC MySQL DATETIME format.
   return date.toISOString().slice(0, 19).replace("T", " ");
 };
 
