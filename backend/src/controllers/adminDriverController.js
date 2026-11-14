@@ -3,7 +3,10 @@ import { unbanDriver, banDriver } from "../services/driverBanService.js";
 import {
   reassignDriverTaxiGate,
   getAdminDrivers,
+  getAdminDriverDetails,
+  updateAdminDriver,
 } from "../services/adminDriverService.js";
+
 import { sendSuccess } from "../utils/apiResponse.js";
 import ApiError from "../utils/ApiError.js";
 
@@ -150,6 +153,42 @@ export const getAdminDriversController = async (req, res, next) => {
       meta: {
         pagination: result.pagination,
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getAdminDriverDetailsController = async (req, res, next) => {
+  try {
+    const driverId = Number(req.params.driverId);
+
+    const driver = await getAdminDriverDetails(driverId);
+
+    return sendSuccess(res, {
+      message: "Driver details retrieved successfully.",
+      data: driver,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateAdminDriverController = async (req, res, next) => {
+  try {
+    const driverId = Number(req.params.driverId);
+
+    const { fullName, phoneNumber } = req.body ?? {};
+
+    const result = await updateAdminDriver({
+      driverId,
+      fullName,
+      phoneNumber,
+    });
+
+    return sendSuccess(res, {
+      message: "Driver updated successfully.",
+      data: result,
     });
   } catch (error) {
     next(error);

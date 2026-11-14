@@ -6,6 +6,7 @@ import {
   temporaryBanDriverController,
   permanentBanDriverController,
   getAdminDriversController,
+  getAdminDriverDetailsController,
 } from "../controllers/adminDriverController.js";
 
 import { authenticate, authorize } from "../middleware/authMiddleware.js";
@@ -16,6 +17,13 @@ const router = express.Router();
 
 // Admin retrieves Driver list
 router.get("/", authenticate, authorize("admin"), getAdminDriversController);
+
+router.get(
+  "/:driverId",
+  authenticate,
+  authorize("admin"),
+  getAdminDriverDetailsController,
+);
 
 // Admin Temporary Ban Driver
 router.patch(

@@ -346,3 +346,116 @@ export const getAdminDriverDetails = async (driverId) => {
 
   return drivers[0];
 };
+
+export const updateAdminDriver = async ({
+  driverId,
+  fullName,
+  phoneNumber,
+}) => {
+  if (!Number.isSafeInteger(driverId) || driverId <= 0) {
+    throw new ApiError(400, "Invalid Driver ID.");
+  }
+
+  const updates = {};
+
+  if (fullName !== undefined) {
+    if (typeof fullName !== "string" || !fullName.trim()) {
+      throw new ApiError(400, "Invalid Driver name.");
+    }
+
+    updates.full_name = fullName.trim();
+  }
+
+  if (phoneNumber !== undefined) {
+    if (typeof phoneNumber !== "string" || !phoneNumber.trim()) {
+      throw new ApiError(400, "Invalid phone number.");
+    }
+
+    updates.phone_number = phoneNumber.trim();
+  }
+
+  if (Object.keys(updates).length === 0) {
+    throw new ApiError(400, "At least one field must be provided.");
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [drivers] = await connection.execute(
+      `SELECT id, phone_number
+       FROM drivers
+       WHERE id = ? AND deleted_at IS NULL
+       FOR UPDATE`,
+      [driverId],
+    );
+
+    if (drivers.length === 0) {
+      throw new ApiError(404, "Driver not found.");
+    }
+
+    const currentDriver = drivers[0];
+
+    if (
+      updates.phone_number !== undefined &&
+      updates.phone_number !== currentDriver.phone_number
+    ) {
+      const [existingDrivers] = await connection.execute(
+        `SELECT id
+         FROM drivers
+         WHERE phone_number = ?
+           AND id != ?
+         LIMIT 1`,
+        [updates.phone_number, driverId],
+      );
+
+      if (existingDrivers.length > 0) {
+        throw new ApiError(409, "Phone number is already in use.");
+      }
+    }
+
+    const fields = [];
+    const values = [];
+
+    if (updates.full_name !== undefined) {
+      fields.push("full_name = ?");
+      values.push(updates.full_name);
+    }
+
+    if (
+      updates.phone_number !== undefined &&
+      updates.phone_number !== currentDriver.phone_number
+    ) {
+      fields.push("phone_number = ?");
+      fields.push("phone_verified_at = NULL");
+      values.push(updates.phone_number);
+    }
+
+    if (fields.length > 0) {
+      fields.push("updated_at = UTC_TIMESTAMP()");
+
+      await connection.execute(
+        `UPDATE drivers
+         SET ${fields.join(", ")}
+         WHERE id = ?`,
+        [...values, driverId],
+      );
+    }
+
+    await connection.commit();
+
+    return {
+      driverId,
+      ...updates,
+      phoneVerified: fields.includes("phone_verified_at = NULL")
+        ? false
+        : undefined,
+    };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
