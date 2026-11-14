@@ -1,23 +1,15 @@
 import { unbanDriver, banDriver } from "../services/driverBanService.js";
-import { sendSuccess } from "../utils/apiResponse.js";
+
 import { reassignDriverTaxiGate } from "../services/adminDriverService.js";
+import { sendSuccess } from "../utils/apiResponse.js";
+import ApiError from "../utils/ApiError.js";
 
 // Admin unbans a Driver
 export const unbanDriverController = async (req, res, next) => {
   try {
     const driverId = Number(req.params.driverId);
-    const adminId = req.user.id;
+    const adminId = req.user.userId;
 
-    // Validate Driver ID
-    if (!Number.isSafeInteger(driverId) || driverId <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid Driver ID.",
-        data: null,
-      });
-    }
-
-    // Call Unban Service
     await unbanDriver({
       driverId,
       adminId,
@@ -29,25 +21,6 @@ export const unbanDriverController = async (req, res, next) => {
       availabilityStatus: "offline",
     });
   } catch (error) {
-    if (error.message === "Driver not found.") {
-      return res.status(404).json({
-        success: false,
-        message: error.message,
-        data: null,
-      });
-    }
-
-    if (
-      error.message === "Driver is not currently banned." ||
-      error.message === "Active ban history record not found."
-    ) {
-      return res.status(409).json({
-        success: false,
-        message: error.message,
-        data: null,
-      });
-    }
-
     next(error);
   }
 };
@@ -56,29 +29,21 @@ export const unbanDriverController = async (req, res, next) => {
 export const temporaryBanDriverController = async (req, res, next) => {
   try {
     const driverId = Number(req.params.driverId);
-    const adminId = req.user.id;
+    const adminId = req.user.userId;
 
     const { banExpiresAt, reason = null } = req.body ?? {};
 
-    if (!Number.isSafeInteger(driverId) || driverId <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid Driver ID.",
-        data: null,
-      });
-    }
-
     if (
       typeof banExpiresAt !== "string" ||
-      !banExpiresAt.trim() ||
-      !Number.isFinite(new Date(banExpiresAt).getTime()) ||
-      new Date(banExpiresAt).getTime() <= Date.now()
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\+06:30$/.test(
+        banExpiresAt,
+      ) ||
+      !Number.isFinite(new Date(banExpiresAt).getTime())
     ) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid future ban expiry date is required.",
-        data: null,
-      });
+      throw new ApiError(
+        400,
+        "Ban expiry must be a valid Myanmar local date and time with +06:30 timezone.",
+      );
     }
 
     await banDriver({
@@ -100,14 +65,6 @@ export const temporaryBanDriverController = async (req, res, next) => {
       },
     );
   } catch (error) {
-    if (error.message === "Driver not found.") {
-      return res.status(404).json({
-        success: false,
-        message: error.message,
-        data: null,
-      });
-    }
-
     next(error);
   }
 };
@@ -116,17 +73,9 @@ export const temporaryBanDriverController = async (req, res, next) => {
 export const permanentBanDriverController = async (req, res, next) => {
   try {
     const driverId = Number(req.params.driverId);
-    const adminId = req.user.id;
+    const adminId = req.user.userId;
 
     const { reason = null } = req.body ?? {};
-
-    if (!Number.isSafeInteger(driverId) || driverId <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid Driver ID.",
-        data: null,
-      });
-    }
 
     await banDriver({
       driverId,
@@ -147,14 +96,6 @@ export const permanentBanDriverController = async (req, res, next) => {
       },
     );
   } catch (error) {
-    if (error.message === "Driver not found.") {
-      return res.status(404).json({
-        success: false,
-        message: error.message,
-        data: null,
-      });
-    }
-
     next(error);
   }
 };

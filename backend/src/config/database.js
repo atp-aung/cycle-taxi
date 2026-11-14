@@ -15,6 +15,7 @@ const pool = mysql.createPool({
   keepAliveInitialDelay: 0,
 
   charset: "utf8mb4",
+  timezone: "Z",
 });
 
 export const testDatabaseConnection = async () => {

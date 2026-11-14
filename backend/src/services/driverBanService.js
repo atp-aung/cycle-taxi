@@ -27,7 +27,7 @@ const convertExpiryToUTC = (value) => {
 
   // Require ISO 8601 with an explicit timezone offset.
   const isoPattern =
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\+06:30$/;
 
   if (!isoPattern.test(value)) {
     throw new ApiError(
