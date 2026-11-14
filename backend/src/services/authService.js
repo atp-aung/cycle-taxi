@@ -25,7 +25,14 @@ export const createSession = async ({
     throw new ApiError(400, "Invalid authentication method.");
   }
 
-  if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) {
+  const normalizedUserId =
+    typeof userId === "number"
+      ? userId
+      : typeof userId === "string" && /^\d+$/.test(userId)
+        ? Number(userId)
+        : NaN;
+
+  if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
     throw new ApiError(400, "Invalid user ID.");
   }
 
@@ -38,14 +45,19 @@ export const createSession = async ({
 
   const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000);
 
-  const connection = await pool.getConnection();
+  // Validate calculated expiration date
+  if (!Number.isFinite(expiresAt.getTime())) {
+    throw new ApiError(500, "Invalid session expiration date.");
+  }
 
+  const connection = await pool.getConnection();
+  let transactionStarted = false;
   try {
     await connection.beginTransaction();
-
+    transactionStarted = true;
     if (role === "driver") {
       // Clear expired temporary ban using the current transaction.
-      await clearExpiredTemporaryBan(userId, connection);
+      await clearExpiredTemporaryBan(normalizedUserId, connection);
 
       // Re-check Driver account status after clearing expired ban.
       const [drivers] = await connection.execute(
@@ -53,7 +65,7 @@ export const createSession = async ({
      FROM drivers
      WHERE id = ?
      FOR UPDATE`,
-        [userId],
+        [normalizedUserId],
       );
 
       if (drivers.length === 0 || drivers[0].deleted_at !== null) {
@@ -70,7 +82,7 @@ export const createSession = async ({
      SET revoked_at = NOW()
      WHERE driver_id = ?
        AND revoked_at IS NULL`,
-        [userId],
+        [normalizedUserId],
       );
 
       // Every new Driver login starts Offline.
@@ -79,7 +91,7 @@ export const createSession = async ({
      SET availability_status = 'offline',
          available_since = NULL
      WHERE id = ?`,
-        [userId],
+        [normalizedUserId],
       );
     }
 
@@ -90,7 +102,7 @@ export const createSession = async ({
          FROM admins
          WHERE id = ?
          FOR UPDATE`,
-        [userId],
+        [normalizedUserId],
       );
 
       if (admins.length === 0 || !admins[0].is_active) {
@@ -104,18 +116,20 @@ export const createSession = async ({
       `INSERT INTO auth_sessions
        (${ownerColumn}, auth_method, token_hash, expires_at)
        VALUES (?, ?, ?, ?)`,
-      [userId, authMethod, tokenHash, expiresAt],
+      [normalizedUserId, authMethod, tokenHash, expiresAt],
     );
 
     await connection.commit();
-
+    transactionStarted = false;
     return {
       token: rawToken,
       expiresAt,
     };
   } catch (error) {
     try {
-      await connection.rollback();
+      if (transactionStarted) {
+        await connection.rollback();
+      }
     } catch (rollbackError) {
       console.error("Transaction rollback failed:", rollbackError);
     }
@@ -126,10 +140,19 @@ export const createSession = async ({
   }
 };
 
-// Find and validate an active session
+const isSessionValid = (expiresAt) => {
+  const expirationTime = new Date(expiresAt).getTime();
 
+  return Number.isFinite(expirationTime) && expirationTime > Date.now();
+};
+
+// Find and validate an active session
 export const findActiveSession = async (rawToken, authMethod) => {
-  if (!rawToken || !["cookie", "bearer"].includes(authMethod)) {
+  if (
+    typeof rawToken !== "string" ||
+    !/^[a-f0-9]{64}$/.test(rawToken) ||
+    !["cookie", "bearer"].includes(authMethod)
+  ) {
     return null;
   }
 
@@ -227,7 +250,7 @@ export const findActiveSession = async (rawToken, authMethod) => {
           currentSession &&
           String(currentSession.driver_id) === String(driver.id) &&
           currentSession.revoked_at === null &&
-          new Date(currentSession.expires_at).getTime() > Date.now() &&
+          isSessionValid(currentSession.expires_at) &&
           driver.deleted_at === null &&
           driver.ban_type === "none"
         ) {
@@ -281,12 +304,22 @@ export const findActiveSession = async (rawToken, authMethod) => {
       const currentSession = currentSessions[0];
       const admin = admins[0];
 
+      if (!admin) {
+        await connection.execute(
+          `UPDATE auth_sessions
+     SET revoked_at = NOW()
+     WHERE id = ?
+       AND revoked_at IS NULL`,
+          [initialSession.id],
+        );
+      }
+
       if (
         currentSession &&
         admin &&
         String(currentSession.admin_id) === String(admin.id) &&
         currentSession.revoked_at === null &&
-        new Date(currentSession.expires_at).getTime() > Date.now() &&
+        isSessionValid(currentSession.expires_at) &&
         admin.is_active
       ) {
         await connection.execute(
