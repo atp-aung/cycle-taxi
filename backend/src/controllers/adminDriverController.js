@@ -1,6 +1,9 @@
 import { unbanDriver, banDriver } from "../services/driverBanService.js";
 
-import { reassignDriverTaxiGate } from "../services/adminDriverService.js";
+import {
+  reassignDriverTaxiGate,
+  getAdminDrivers,
+} from "../services/adminDriverService.js";
 import { sendSuccess } from "../utils/apiResponse.js";
 import ApiError from "../utils/ApiError.js";
 
@@ -114,6 +117,40 @@ export const reassignDriverTaxiGateController = async (req, res, next) => {
     });
 
     return sendSuccess(res, "Driver has been reassigned successfully.", result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Admin retrieves Driver list
+
+export const getAdminDriversController = async (req, res, next) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      search = "",
+      registrationStatus,
+      availabilityStatus,
+      banType,
+    } = req.query;
+
+    const result = await getAdminDrivers({
+      page: Number(page),
+      limit: Number(limit),
+      search,
+      registrationStatus,
+      availabilityStatus,
+      banType,
+    });
+
+    return sendSuccess(res, {
+      message: "Drivers retrieved successfully.",
+      data: result.drivers,
+      meta: {
+        pagination: result.pagination,
+      },
+    });
   } catch (error) {
     next(error);
   }

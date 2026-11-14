@@ -160,3 +160,129 @@ export const reassignDriverTaxiGate = async ({
     connection.release();
   }
 };
+
+export const getAdminDrivers = async ({
+  page = 1,
+  limit = 10,
+  search = "",
+  registrationStatus,
+  availabilityStatus,
+  banType,
+}) => {
+  const normalizedPage = Number(page);
+  const normalizedLimit = Number(limit);
+
+  if (
+    !Number.isSafeInteger(normalizedPage) ||
+    normalizedPage < 1 ||
+    !Number.isSafeInteger(normalizedLimit) ||
+    normalizedLimit < 1 ||
+    normalizedLimit > 50
+  ) {
+    throw new ApiError(400, "Invalid pagination parameters.");
+  }
+
+  if (typeof search !== "string") {
+    throw new ApiError(400, "Invalid search keyword.");
+  }
+
+  const allowedRegistrationStatuses = ["pending", "approved", "rejected"];
+
+  const allowedAvailabilityStatuses = ["available", "busy", "offline"];
+
+  const allowedBanTypes = ["none", "temporary", "permanent"];
+
+  if (
+    registrationStatus &&
+    !allowedRegistrationStatuses.includes(registrationStatus)
+  ) {
+    throw new ApiError(400, "Invalid registration status.");
+  }
+
+  if (
+    availabilityStatus &&
+    !allowedAvailabilityStatuses.includes(availabilityStatus)
+  ) {
+    throw new ApiError(400, "Invalid availability status.");
+  }
+
+  if (banType && !allowedBanTypes.includes(banType)) {
+    throw new ApiError(400, "Invalid ban type.");
+  }
+
+  const conditions = ["d.deleted_at IS NULL"];
+  const params = [];
+
+  const keyword = search.trim();
+
+  if (keyword) {
+    conditions.push("(d.full_name LIKE ? OR d.phone_number LIKE ?)");
+
+    params.push(`%${keyword}%`, `%${keyword}%`);
+  }
+
+  if (registrationStatus) {
+    conditions.push("d.registration_status = ?");
+    params.push(registrationStatus);
+  }
+
+  if (availabilityStatus) {
+    conditions.push("d.availability_status = ?");
+    params.push(availabilityStatus);
+  }
+
+  if (banType) {
+    conditions.push("d.ban_type = ?");
+    params.push(banType);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const [countRows] = await pool.execute(
+    `SELECT COUNT(*) AS total
+     FROM drivers d
+     WHERE ${whereClause}`,
+    params,
+  );
+
+  const total = Number(countRows[0].total);
+  const totalPages = Math.ceil(total / normalizedLimit);
+  const offset = (normalizedPage - 1) * normalizedLimit;
+
+  const [drivers] = await pool.execute(
+    `SELECT
+       d.id,
+       d.full_name,
+       d.phone_number,
+       d.registration_status,
+       d.availability_status,
+       d.ban_type,
+       d.ban_expires_at,
+       d.created_at,
+       tg.id AS taxi_gate_id,
+       tg.name AS taxi_gate_name,
+       bs.name AS bus_stop_name,
+       tw.name AS township_name
+     FROM drivers d
+     INNER JOIN taxi_gates tg
+       ON d.taxi_gate_id = tg.id
+     INNER JOIN bus_stops bs
+       ON tg.bus_stop_id = bs.id
+     INNER JOIN townships tw
+       ON bs.township_id = tw.id
+     WHERE ${whereClause}
+     ORDER BY d.created_at DESC, d.id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, normalizedLimit, offset],
+  );
+
+  return {
+    drivers,
+    pagination: {
+      page: normalizedPage,
+      limit: normalizedLimit,
+      total,
+      totalPages,
+    },
+  };
+};
