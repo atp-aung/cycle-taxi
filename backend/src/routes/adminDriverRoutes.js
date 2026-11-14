@@ -7,6 +7,7 @@ import {
   permanentBanDriverController,
   getAdminDriversController,
   getAdminDriverDetailsController,
+  updateAdminDriverController,
 } from "../controllers/adminDriverController.js";
 
 import { authenticate, authorize } from "../middleware/authMiddleware.js";
@@ -23,6 +24,15 @@ router.get(
   authenticate,
   authorize("admin"),
   getAdminDriverDetailsController,
+);
+
+// Admin updates Driver information
+router.patch(
+  "/:driverId",
+  authenticate,
+  csrfProtection,
+  authorize("admin"),
+  updateAdminDriverController,
 );
 
 // Admin Temporary Ban Driver
