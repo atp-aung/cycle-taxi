@@ -8,7 +8,7 @@ import { rateLimit } from "express-rate-limit";
 import cookieParser from "cookie-parser";
 import pool from "./config/database.js";
 import healthRoutes from "./routes/healthRoutes.js";
-
+import driverRoutes from "./routes/driverRoutes.js";
 import notFoundMiddleware from "./middleware/notFoundMiddleware.js";
 import errorMiddleware from "./middleware/errorMiddleware.js";
 import authRoutes from "./routes/authRoutes.js";
@@ -76,6 +76,7 @@ app.use("/api", apiLimiter);
 app.use("/api/v1/health", healthRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/admin/drivers", adminDriverRoutes);
+app.use("/api/v1/driver", driverRoutes);
 
 // 404 Handler
 app.use(notFoundMiddleware);
