@@ -1,5 +1,6 @@
 import { unbanDriver } from "../services/driverBanService.js";
 import { sendSuccess } from "../utils/apiResponse.js";
+import { reassignDriverTaxiGate } from "../services/adminDriverService.js";
 
 // Admin unbans a Driver
 export const unbanDriverController = async (req, res, next) => {
@@ -47,6 +48,25 @@ export const unbanDriverController = async (req, res, next) => {
       });
     }
 
+    next(error);
+  }
+};
+
+// Admin reassigns a Driver to another Taxi Gate
+export const reassignDriverTaxiGateController = async (req, res, next) => {
+  try {
+    const driverId = Number(req.params.driverId);
+    const { newTaxiGateId } = req.body ?? {};
+    const adminId = req.user.userId;
+
+    const result = await reassignDriverTaxiGate({
+      driverId,
+      newTaxiGateId: Number(newTaxiGateId),
+      adminId,
+    });
+
+    return sendSuccess(res, "Driver has been reassigned successfully.", result);
+  } catch (error) {
     next(error);
   }
 };

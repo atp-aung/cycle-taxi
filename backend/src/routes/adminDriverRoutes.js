@@ -1,6 +1,9 @@
 import express from "express";
 
-import { unbanDriverController } from "../controllers/adminDriverController.js";
+import {
+  unbanDriverController,
+  reassignDriverTaxiGateController,
+} from "../controllers/adminDriverController.js";
 
 import { authenticate, authorize } from "../middleware/authMiddleware.js";
 
@@ -15,6 +18,15 @@ router.patch(
   csrfProtection,
   authorize("admin"),
   unbanDriverController,
+);
+
+// Admin Reassign Driver Taxi Gate
+router.patch(
+  "/:driverId/taxi-gate",
+  authenticate,
+  csrfProtection,
+  authorize("admin"),
+  reassignDriverTaxiGateController,
 );
 
 export default router;
